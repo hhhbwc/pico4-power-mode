@@ -19,7 +19,7 @@ echo === 1. compile ===
 if exist "%MOD%\build\classes" rmdir /s /q "%MOD%\build\classes"
 mkdir "%MOD%\build\classes"
 dir /s /b "%MOD%\stub\*.java" "%MOD%\src\*.java" > "%MOD%\build\sources.txt"
-%JAVAC% --release 8 -nowarn -d "%MOD%\build\classes" @"%MOD%\build\sources.txt"
+%JAVAC% --release 8 -encoding UTF-8 -nowarn -d "%MOD%\build\classes" @"%MOD%\build\sources.txt"
 if errorlevel 1 ( echo COMPILE FAILED & exit /b 1 )
 
 echo === 2. dex ===

@@ -16,7 +16,7 @@ usesFramework:
   tag: null
 version: 2.9.3
 versionInfo:
-  versionCode: 2
-  versionName: '1.1'
+  versionCode: 3
+  versionName: '1.2'
 doNotCompress:
 - assets/xposed_init

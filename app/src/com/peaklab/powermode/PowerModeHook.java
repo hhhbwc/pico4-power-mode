@@ -15,257 +15,190 @@ import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Locale;
 
-/**
- * PicoLabPowerMode
- * 给 Pico 4 设置 / 实验室 / 电源管理方案 的下拉框加上 "高性能"(High Performance, powerlevel=2) 档位。
- *
- * 策略(稳):
- *  1. hook PicolabFragment.T0(): 置一个标志, 表示正在弹"电源模式"菜单
- *  2. hook PopupMenuHelper.c(Activity, View, BaseAdapter, SimpleOnItemClickListener, int):
- *     若标志置位, 反射取 OSUIMenuAdapter 的私有 List<MenuItemData> f, 若尚无"高性能"项则追加一项
- *     (MenuItemData(TYPE_TITLE_CHECK).k(picolab_powerFunc3)), 并 notifyDataSetChanged()
- *  3. hook PicolabFragment.U0(int): i==2(高性能) 时直接运行时切换(DeviceSwitchUtilsKt.e(ctx,2)),
- *     避免走 P()[2] 越界; 并刷新按钮文字
- *
- * 系统底层已支持 powerlevel=2 (eyebuffer 2048 / 关FFR / 关stencil / 由 DeviceSwitchUtilsKt.e 写 props).
- */
+/** Power Mode endpoint for the pico_power_coord_v2 last-writer-wins protocol. */
 public class PowerModeHook implements IXposedHookLoadPackage {
-
     public static final String TAG = "PicoLabPower";
+    private static final String PREFIX = "pico_power_coord_v2_";
+    private static final String REQUEST = PREFIX + "request";
+    private static final String ACK = PREFIX + "ack";
+    private static final String EFFECTIVE_OWNER = PREFIX + "effective_owner";
+    private static final String PHASE = PREFIX + "phase";
+    private static final String ERROR = PREFIX + "error";
+    private static volatile boolean sPowerMenuOpen;
+    private static volatile Object sFragment;
+    private static volatile ClassLoader sLoader;
+    private static volatile Thread sWorker;
+    private static volatile Thread sPoller;
 
-    // 静态标志: 当前是否在弹"电源模式"菜单 (PicolabFragment)
-    private static volatile boolean sPowerMenuOpen = false;
-    private static final String COORD_PREFIX = "pico_power_coord_";
-    private static final String COORD_OWNER = COORD_PREFIX + "owner";
-    private static final String COORD_SLEEP_ACTIVE = COORD_PREFIX + "sleep_active";
-    private static final String COORD_POWER_MODE = COORD_PREFIX + "requested_power_mode";
-    private static final String COORD_GENERATION = COORD_PREFIX + "generation";
-
-    @Override
-    public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lp) {
-        if (lp.packageName == null || !lp.packageName.equals("com.picovr.settings")) {
-            return;
+    static final class Request {
+        final String raw, token, owner, payload;
+        final int mode;
+        Request(String raw, String token, String owner, int mode) {
+            this.raw = raw; this.token = token; this.owner = owner;
+            this.payload = String.valueOf(mode); this.mode = mode;
         }
-        XposedBridge.log(TAG + ": load in settings");
-        final ClassLoader cl = lp.classLoader;
+    }
 
+    // Pure protocol logic, deliberately package-private for the host-side main test.
+    static Request parseRequest(String raw) {
+        if (raw == null) return null;
+        String[] p = raw.split("\\|", -1);
+        if (p.length != 4 || !"2".equals(p[0]) || p[1].length() == 0 || !"power".equals(p[2])) return null;
+        try { int mode = Integer.parseInt(p[3]);
+            if (mode < 0 || mode > 2) return null;
+            return new Request(raw, p[1], p[2], mode);
+        } catch (NumberFormatException e) { return null; }
+    }
+    static boolean isExactAck(Request r, String ack) { return r != null && r.raw.equals(ack); }
+    static boolean shouldCommitUi(boolean applied, Request r, String current) { return applied && r != null && r.raw.equals(current); }
+    static boolean vsleepMustWait(String owner, int active, int snapshot, String phase) {
+        return active == 1 || snapshot == 1 || "restoring".equals(phase) || "vsleep".equals(owner);
+    }
+    static boolean mayApply(Request r, String current, String ack, String owner, int active, int snapshot, String phase, boolean handoff) {
+        if (r == null || !r.raw.equals(current)) return false;
+        // A handoff is acknowledged by V-Sleep only after its snapshot is gone.
+        if (vsleepMustWait(owner, active, snapshot, phase)) return false;
+        return !handoff || isExactAck(r, ack);
+    }
+
+    @Override public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lp) {
+        if (!"com.picovr.settings".equals(lp.packageName)) return;
         final Class<?> frag;
-        try {
-            frag = XposedHelpers.findClass("com.picovr.fragments.PicolabFragment", cl);
-        } catch (Throwable t) {
-            XposedBridge.log(TAG + ": no PicolabFragment " + t);
-            return;
-        }
-        XposedBridge.log(TAG + ": PicolabFragment found");
-
-        // ---------- 反射取 R.string 资源 ----------
-        // 运行时 R.string 字段名可能被 proguard 混淆, 直接用 public.xml 里稳定的资源ID常量.
-        //  (picolab_powerFunc1=0x7f1002e8, Func2=0x7f1002e9, Func3=0x7f1002ea)
-        final int resPowerFunc3 = 0x7f1002ea;
-        final int resPowerFunc2 = 0x7f1002e9;
-        final int resPowerTip3 = 0x7f1002ea;
-
-        // ---------- 1) hook T0(View): 置标志 (T0 是带 View 参数的私有方法) ----------
+        try { frag = XposedHelpers.findClass("com.picovr.fragments.PicolabFragment", lp.classLoader); }
+        catch (Throwable t) { XposedBridge.log(TAG + ": no PicolabFragment " + t); return; }
+        sLoader = lp.classLoader;
         try {
             XposedHelpers.findAndHookMethod(frag, "T0", View.class, new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam p) { sPowerMenuOpen = true; }
-                @Override protected void afterHookedMethod(MethodHookParam p)  { sPowerMenuOpen = false; }
+                @Override protected void afterHookedMethod(MethodHookParam p) { sPowerMenuOpen = false; }
             });
         } catch (Throwable t) { XposedBridge.log(TAG + ": T0 hook err " + t); }
-
-        // ---------- 2) hook PopupMenuHelper.c: 给电源菜单加"高性能"项 ----------
         try {
-            Class<?> helper = XposedHelpers.findClass("com.picovr.customviews.PopupMenuHelper", cl);
-            Class<?> listener = XposedHelpers.findClass("com.picovr.listener.SimpleOnItemClickListener", cl);
-            XposedHelpers.findAndHookMethod(helper, "c",
-                android.app.Activity.class, View.class, BaseAdapter.class,
-                listener, int.class,
-                new XC_MethodHook() {
-                    @Override protected void beforeHookedMethod(MethodHookParam p) {
-                        if (!sPowerMenuOpen) return;
-                        try {
-                            BaseAdapter adapter = (BaseAdapter) p.args[2];
-                            if (adapter == null) return;
-                            // 反射取 List<MenuItemData> f
-                            Field f = null;
-                            for (Field fd : adapter.getClass().getDeclaredFields()) {
-                                if (fd.getType() == java.util.List.class) { f = fd; break; }
-                            }
-                            if (f == null) return;
-                            f.setAccessible(true);
-                            List<Object> data = (List<Object>) f.get(adapter);
-                            // 已是3项则跳过
-                            if (data.size() >= 3) { sPowerMenuOpen = false; return; }
-                            // 构造 MenuItemData(TYPE_TITLE_CHECK).k(powerFunc3)
-                            Class<?> typeEnum = XposedHelpers.findClass(
-                                "com.bytedance.osui.popupmenu.MenuItemType", cl);
-                            Object titleCheck = Enum.valueOf((Class<? extends Enum>) typeEnum, "TYPE_TITLE_CHECK");
-                            Class<?> md = XposedHelpers.findClass(
-                                "com.bytedance.osui.popupmenu.MenuItemData", cl);
-                            Object item = md.getConstructor(typeEnum).newInstance(titleCheck);
-                            // item.k(R.string.picolab_powerFunc3) -> 显示"效果优先", 改用 l(CharSequence) 直接设文案
-                            // k.invoke(item, resPowerFunc3);
-                            Method l = md.getMethod("l", CharSequence.class);
-                            l.invoke(item, getLocalizedString((Context) p.args[0]));
-                            data.add(item);
-                            // 刷新
-                            Method n = adapter.getClass().getMethod("notifyDataSetChanged");
-                            n.invoke(adapter);
-                            XposedBridge.log(TAG + ": added High Performance item to power menu");
-                        } catch (Throwable t) {
-                            XposedBridge.log(TAG + ": inject menu err " + t);
-                        } finally {
-                            sPowerMenuOpen = false;
-                        }
-                    }
-                });
-        } catch (Throwable t) {
-            XposedBridge.log(TAG + ": PopupMenuHelper hook err " + t);
-        }
-
-        // ---------- 3) hook U0(int i): 高性能(i==2) 运行时切换 ----------
+            Class<?> helper = XposedHelpers.findClass("com.picovr.customviews.PopupMenuHelper", lp.classLoader);
+            Class<?> listener = XposedHelpers.findClass("com.picovr.listener.SimpleOnItemClickListener", lp.classLoader);
+            XposedHelpers.findAndHookMethod(helper, "c", android.app.Activity.class, View.class, BaseAdapter.class, listener, int.class, new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam p) {
+                    if (!sPowerMenuOpen) return;
+                    try {
+                        BaseAdapter adapter = (BaseAdapter) p.args[2]; if (adapter == null) return;
+                        Field f = null; for (Field fd : adapter.getClass().getDeclaredFields()) if (fd.getType() == List.class) { f = fd; break; }
+                        if (f == null) return; f.setAccessible(true); List data = (List) f.get(adapter); if (data.size() >= 3) return;
+                        Class<?> type = XposedHelpers.findClass("com.bytedance.osui.popupmenu.MenuItemType", lp.classLoader);
+                        Object item = XposedHelpers.findClass("com.bytedance.osui.popupmenu.MenuItemData", lp.classLoader)
+                                .getConstructor(type).newInstance(Enum.valueOf((Class<? extends Enum>) type, "TYPE_TITLE_CHECK"));
+                        item.getClass().getMethod("l", CharSequence.class).invoke(item, getLocalizedString((Context) p.args[0]));
+                        data.add(item); adapter.notifyDataSetChanged();
+                    } catch (Throwable t) { XposedBridge.log(TAG + ": inject menu err " + t); }
+                    finally { sPowerMenuOpen = false; }
+                }
+            });
+        } catch (Throwable t) { XposedBridge.log(TAG + ": menu hook err " + t); }
         try {
             XposedHelpers.findAndHookMethod(frag, "U0", int.class, new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam p) {
-                    int i = (int) p.args[0];
-                    if (i == 0 || i == 1 || i == 2) { // 接管三个档位: 双向强制 eyebuffer
-                        try {
-                            Object activity = XposedHelpers.callMethod(p.thisObject, "getActivity");
-                            Context context = activity instanceof Context ? (Context) activity : null;
-                            if (context == null) throw new IllegalStateException("Settings activity has no Context");
-                            publishRequestedMode(context, i);
-                            if (sleepOwnsDisplay(context)) {
-                                XposedBridge.log(TAG + ": deferred powerlevel=" + i + " while V-Sleep owns display state");
-                            } else {
-                                applyPowerMode(context, i, cl);
-                            }
-                            // 更新字段 this.m = i (反射)
-                            try {
-                                Field mf = frag.getDeclaredField("m");
-                                mf.setAccessible(true);
-                                mf.setInt(p.thisObject, i);
-                            } catch (Throwable t) { XposedBridge.log(TAG + " set m err " + t); }
-                            // 刷新按钮文字: V(i)
-                            Method v = frag.getDeclaredMethod("V", int.class);
-                            v.setAccessible(true);
-                            v.invoke(p.thisObject, i);
-                            XposedBridge.log(TAG + ": powerlevel=" + i + " applied (eyebuffer forced)");
-                        } catch (Throwable t) {
-                            XposedBridge.log(TAG + ": U0(" + i + ") err " + t);
-                        }
-                        p.setResult(null); // 接管原逻辑, 避免越界
-                    }
+                    int mode = (Integer) p.args[0]; if (mode < 0 || mode > 2) return;
+                    try {
+                        Object a = XposedHelpers.callMethod(p.thisObject, "getActivity");
+                        if (!(a instanceof Context)) throw new IllegalStateException("no Settings context");
+                        sFragment = p.thisObject; submit((Context) a, mode, p.thisObject, lp.classLoader);
+                    } catch (Throwable t) { XposedBridge.log(TAG + ": U0 submit failed " + t); }
+                    p.setResult(null);
                 }
             });
-        } catch (Throwable t) {
-            XposedBridge.log(TAG + ": U0 hook err " + t);
-        }
-
-        // ---------- 4) hook Q(int): 当前方案/按钮文字 (i==2 时不用系统资源"效果优先", 改显"性能模式") ----------
+        } catch (Throwable t) { XposedBridge.log(TAG + ": U0 hook err " + t); }
         try {
             XposedHelpers.findAndHookMethod(frag, "Q", int.class, new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam p) {
-                    int i = (int) p.args[0];
-                    if (i == 2) {
-                        Context ctx = (Context) XposedHelpers.callMethod(p.thisObject, "getActivity");
-                        p.setResult(getLocalizedString(ctx));
+                    int mode = (Integer) p.args[0]; Object a = XposedHelpers.callMethod(p.thisObject, "getActivity");
+                    if (a instanceof Context) {
+                        startPoller((Context) a, p.thisObject);
+                        if (isVsleepVisible((Context) a)) p.setResult("V-Sleep 生效中（基础档位: " + getInt((Context) a, "powerlevel", mode) + "）");
+                        else if (mode == 2) p.setResult(getLocalizedString((Context) a));
                     }
                 }
             });
         } catch (Throwable t) { XposedBridge.log(TAG + ": Q hook err " + t); }
-
-        XposedBridge.log(TAG + ": installed");
+        XposedBridge.log(TAG + ": v2 hooks installed");
     }
 
-    private static void publishRequestedMode(Context context, int mode) throws Exception {
-        Class<?> global = Class.forName("android.provider.Settings$Global");
-        Class<?> resolver = Class.forName("android.content.ContentResolver");
-        Object cr = context.getContentResolver();
-        Method putInt = global.getMethod("putInt", resolver, String.class, int.class);
-        Method getInt = global.getMethod("getInt", resolver, String.class, int.class);
-        if (!((Boolean) putInt.invoke(null, cr, COORD_POWER_MODE, mode)).booleanValue()
-                || ((Integer) getInt.invoke(null, cr, COORD_POWER_MODE, -1)).intValue() != mode) {
-            throw new IllegalStateException("could not persist requested power mode");
-        }
-        int generation = ((Integer) getInt.invoke(null, cr, COORD_GENERATION, 0)).intValue() + 1;
-        if (!((Boolean) putInt.invoke(null, cr, COORD_GENERATION, generation)).booleanValue()) {
-            throw new IllegalStateException("could not advance coordination generation");
-        }
+    private static void submit(final Context c, final int mode, final Object fragment, final ClassLoader cl) throws Exception {
+        final String raw = "2|" + Long.toHexString(System.nanoTime()) + "|power|" + mode;
+        put(c, REQUEST, raw); put(c, PHASE, "requested"); put(c, ERROR, "");
+        Thread old = sWorker; if (old != null) old.interrupt();
+        sWorker = new Thread(new Runnable() { @Override public void run() { coordinate(c, raw, mode, fragment, cl); } }, "PicoPowerCoord");
+        sWorker.start();
     }
-
-    private static boolean sleepOwnsDisplay(Context context) {
+    private static void coordinate(Context c, String raw, int mode, Object fragment, ClassLoader cl) {
+        Request r = parseRequest(raw); long end = System.currentTimeMillis() + 30000;
         try {
-            Class<?> global = Class.forName("android.provider.Settings$Global");
-            Class<?> resolver = Class.forName("android.content.ContentResolver");
-            Object cr = context.getContentResolver();
-            int active = ((Integer) global.getMethod("getInt", resolver, String.class, int.class)
-                    .invoke(null, cr, COORD_SLEEP_ACTIVE, 0)).intValue();
-            String owner = (String) global.getMethod("getString", resolver, String.class)
-                    .invoke(null, cr, COORD_OWNER);
-            return active == 1 && "vsleep".equals(owner);
+            while (System.currentTimeMillis() < end && !Thread.currentThread().isInterrupted()) {
+                String current = get(c, REQUEST); String owner = get(c, EFFECTIVE_OWNER);
+                int active = "active".equals(get(c, PHASE)) && "vsleep".equals(owner) ? 1 : 0;
+                int snapshot = "restoring".equals(get(c, PHASE)) ? 1 : 0;
+                String phase = get(c, PHASE); String ack = get(c, ACK);
+                boolean handoff = "vsleep".equals(owner) || "restoring".equals(phase) || active != 0 || snapshot != 0;
+                if (!raw.equals(current)) return;
+                if (mayApply(r, current, ack, owner, active, snapshot, phase, handoff)) break;
+                Thread.sleep(100);
+            }
+            if (Thread.currentThread().isInterrupted() || !raw.equals(get(c, REQUEST))) return;
+            put(c, PHASE, "applying"); applyPowerMode(c, mode, cl);
+            if (!raw.equals(get(c, REQUEST))) return;
+            put(c, EFFECTIVE_OWNER, "power:" + mode); put(c, PHASE, "active"); put(c, ACK, raw); put(c, ERROR, "");
+            updateUi(c, fragment, mode);
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": coordination read failed " + t);
-            return false;
+            if (raw.equals(get(c, REQUEST))) { put(c, PHASE, "error"); put(c, ERROR, String.valueOf(t.getMessage())); restoreUi(c, fragment); }
+            XposedBridge.log(TAG + ": request failed " + t);
         }
     }
-
-    private static void applyPowerMode(Context context, int mode, ClassLoader cl) throws Exception {
+    private static void applyPowerMode(Context c, int mode, ClassLoader cl) throws Exception {
         Class<?> dsu = XposedHelpers.findClass("com.picovr.settings.custom.DeviceSwitchUtilsKt", cl);
-        dsu.getMethod("e", Context.class, int.class).invoke(null, context, mode);
-        String buffer = mode == 2 ? "2448" : "1504";
-        Class<?> properties = Class.forName("android.os.SystemProperties");
-        Method set = properties.getMethod("set", String.class, String.class);
-        Method get = properties.getMethod("get", String.class);
-        set.invoke(null, "persist.pvr.config.eyebuffer_width", buffer);
-        set.invoke(null, "persist.pvr.config.eyebuffer_height", buffer);
-        String width = (String) get.invoke(null, "persist.pvr.config.eyebuffer_width");
-        String height = (String) get.invoke(null, "persist.pvr.config.eyebuffer_height");
-        if (!buffer.equals(width) || !buffer.equals(height)) {
-            throw new IllegalStateException("eyebuffer verification failed: " + width + "x" + height);
-        }
-        XposedBridge.log(TAG + ": powerlevel=" + mode + " applied, eyebuffer=" + buffer + "x" + buffer);
+        dsu.getMethod("e", Context.class, int.class).invoke(null, c, mode);
+        String expected = mode == 2 ? "2448" : "1504"; setProp("persist.pvr.config.eyebuffer_width", expected); setProp("persist.pvr.config.eyebuffer_height", expected);
+        if (getProp("persist.pvr.config.eyebuffer_width").equals(expected) == false || !getProp("persist.pvr.config.eyebuffer_height").equals(expected)) throw new IllegalStateException("eyebuffer verification failed");
+        if (getInt(c, "powerlevel", -1) != mode) throw new IllegalStateException("powerlevel verification failed");
     }
+    private static void updateUi(final Context c, final Object f, final int mode) { post(f, new Runnable() { public void run() { try { Field m = f.getClass().getDeclaredField("m"); m.setAccessible(true); m.setInt(f, mode); Method v = f.getClass().getDeclaredMethod("V", int.class); v.setAccessible(true); v.invoke(f, mode); } catch (Throwable t) { XposedBridge.log(TAG + ": UI update failed " + t); } } }); }
+    private static void restoreUi(final Context c, final Object f) { final int actual = getInt(c, "powerlevel", 0); post(f, new Runnable() { public void run() { try { Field m = f.getClass().getDeclaredField("m"); m.setAccessible(true); m.setInt(f, actual); Method v = f.getClass().getDeclaredMethod("V", int.class); v.setAccessible(true); v.invoke(f, actual); } catch (Throwable ignored) {} } }); }
+    private static void post(Object f, Runnable r) { try { f.getClass().getMethod("getActivity").invoke(f).getClass().getMethod("runOnUiThread", Runnable.class).invoke(f.getClass().getMethod("getActivity").invoke(f), r); } catch (Throwable ignored) {} }
+    private static boolean isVsleepVisible(Context c) { String owner = get(c, EFFECTIVE_OWNER), phase = get(c, PHASE); return "vsleep".equals(owner) || "restoring".equals(phase); }
+    private static synchronized void startPoller(final Context c, final Object f) {
+        if (sPoller != null && sPoller.isAlive()) return;
+        sPoller = new Thread(new Runnable() { public void run() {
+            while (!Thread.currentThread().isInterrupted()) {
+                try { Thread.sleep(750); if (isVsleepVisible(c)) updateUi(c, f, getInt(c, "powerlevel", 0)); }
+                catch (InterruptedException e) { return; } catch (Throwable ignored) { }
+            }
+        }}, "PicoPowerCoordPoll");
+        sPoller.setDaemon(true); sPoller.start();
+    }
+    private static void put(Context c, String k, String v) { try { Class g = Class.forName("android.provider.Settings$Global"); g.getMethod("putString", Class.forName("android.content.ContentResolver"), String.class, String.class).invoke(null, c.getContentResolver(), k, v); } catch (Throwable t) { throw new RuntimeException(t); } }
+    private static String get(Context c, String k) { try { Class g = Class.forName("android.provider.Settings$Global"); return (String) g.getMethod("getString", Class.forName("android.content.ContentResolver"), String.class).invoke(null, c.getContentResolver(), k); } catch (Throwable t) { return null; } }
+    private static int getInt(Context c, String k, int d) { try { Class g = Class.forName("android.provider.Settings$Global"); return (Integer) g.getMethod("getInt", Class.forName("android.content.ContentResolver"), String.class, int.class).invoke(null, c.getContentResolver(), k, d); } catch (Throwable t) { return d; } }
+    private static void setProp(String k, String v) throws Exception { Class p = Class.forName("android.os.SystemProperties"); p.getMethod("set", String.class, String.class).invoke(null, k, v); }
+    private static String getProp(String k) { try { return (String) Class.forName("android.os.SystemProperties").getMethod("get", String.class).invoke(null, k); } catch (Throwable t) { return ""; } }
 
-    private String getLocalizedString(Context context) {
+    private static String getLocalizedString(Context context) {
         if (context == null) return "性能模式";
         try {
             Object res = XposedHelpers.callMethod(context, "getResources");
             Object config = XposedHelpers.callMethod(res, "getConfiguration");
-            Locale locale = (Locale) XposedHelpers.getObjectField(config, "locale");
-            String lang = locale.getLanguage();
-            String country = locale.getCountry();
-
+            Locale l = (Locale) XposedHelpers.getObjectField(config, "locale");
+            String lang = l.getLanguage(), country = l.getCountry();
             switch (lang) {
-                case "cs": return "Výkonný režim";
-                case "da": return "Ydelsestilstand";
-                case "nl": return "Prestatiemodus";
-                case "fi": return "Suorituskykytila";
-                case "fr": return "Mode performance";
-                case "de": return "Leistungsmodus";
-                case "el": return "Λειτουργία απόδοσης";
-                case "it": return "Modalità prestazioni";
-                case "ja": return "パフォーマンスモード";
-                case "ko": return "성능 모드";
-                case "ms": return "Mod Prestasi";
-                case "nb": case "no": return "Ytelsesmodus";
-                case "pl": return "Tryb wydajności";
-                case "pt": return "Modo de desempenho";
-                case "ro": return "Mod de performanță";
-                case "ru": return "Режим производительности";
-                case "es": return "Modo de rendimiento";
-                case "sv": return "Prestandaläge";
-                case "th": return "โหมดประสิทธิภาพ";
-                case "tr": return "Performans Modu";
-                case "zh":
-                    if ("TW".equals(country) || "HK".equals(country) || "MO".equals(country)) {
-                        return "效能模式";
-                    }
-                    return "性能模式";
-                case "en":
+                case "cs": return "Výkonný režim"; case "da": return "Ydelsestilstand";
+                case "nl": return "Prestatiemodus"; case "fi": return "Suorituskykytila";
+                case "fr": return "Mode performance"; case "de": return "Leistungsmodus";
+                case "el": return "Λειτουργία απόδοσης"; case "it": return "Modalità prestazioni";
+                case "ja": return "パフォーマンスモード"; case "ko": return "성능 모드";
+                case "ms": return "Mod Prestasi"; case "nb": case "no": return "Ytelsesmodus";
+                case "pl": return "Tryb wydajności"; case "pt": return "Modo de desempenho";
+                case "ro": return "Mod de performanță"; case "ru": return "Режим производительности";
+                case "es": return "Modo de rendimiento"; case "sv": return "Prestandaläge";
+                case "th": return "Performance Mode"; case "tr": return "Performans Modu";
+                case "zh": return ("TW".equals(country) || "HK".equals(country) || "MO".equals(country)) ? "效能模式" : "性能模式";
                 default: return "Performance Mode";
             }
-        } catch (Throwable t) {
-            return "性能模式";
-        }
+        } catch (Throwable t) { return "性能模式"; }
     }
 }
