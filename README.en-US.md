@@ -1,22 +1,24 @@
-# PICO 4 High Performance Power Mode Unlock
+# PICO 4 High Performance Power Unlock
 
-An **LSPosed module** that unlocks the hidden **High Performance** option in **PICO 4 (A8110)** `Settings → Lab → Power Management`.
+An **LSPosed module** that unlocks the hidden **Performance** and **Quality** options in **PICO 4 (A8110)** `Settings → Lab → Power Management`.
 
 > 中文: [README.md](README.md) · Русский: [README.ru-RU.md](README.ru-RU.md)
 
 ## Features
 
-- Adds a third **High Performance** option to the `Settings → Lab → Power Management` dropdown (stock only shows Battery Saver / Standard).
-- Selecting High Performance invokes the system's official switch (`DeviceSwitchUtilsKt.e()`, `powerlevel=2`), equivalent to the stock high-perf mode:
-  - **eyebuffer resolution forced to 2448×2448** (full quality, sharper)
-  - **FFR off** (fixed foveated rendering removed — no edge blur)
+- Adds **Performance** and **Quality** options to the `Settings → Lab → Power Management` dropdown (stock only shows Battery Saver / Standard).
+- Selecting Performance (powerlevel=2) or Quality (powerlevel=3) invokes the system's official switch logic:
+  - **Quality (3) forced to 2448×2448 eyebuffer** (full quality, sharper)
+  - **Performance (2) uses stock 1504×1504 eyebuffer**
   - **stencil mesh off**
   - `target_fps=-1` (uncapped frame rate)
-  - **CPU/GPU high-performance scheduling** (`CpuFreqServer onPowerLevelChange 2`)
-- **Bidirectional eyebuffer enforcement** (overrides stock/eco modes too):
-  - High Performance (2) → **2448×2448**
-  - Standard / Battery Saver (0/1) → **1504×1504** (back to stock default, saves power)
-- Dropdown item and button text both show "**性能模式**" (Perf Mode) instead of the stock "效果优先" (Effect-First).
+- **Bidirectional eyebuffer enforcement**:
+  - Quality (3) → **2448×2448**
+  - Performance (2) / Standard / Battery Saver (0/1) → **1504×1504**
+- **FFR is only explicitly disabled in Performance** (`persist.pvr.config.ffr`):
+  - Performance (2) → **off** (`0` — no edge blur, all GPU headroom goes to frame rate)
+  - Quality (3) / Standard / Battery Saver (0/1) → FFR is left untouched so the system keeps its current value
+- Dropdown item and button text show Performance or Quality.
 
 ## Requirements
 
@@ -35,7 +37,7 @@ An **LSPosed module** that unlocks the hidden **High Performance** option in **P
    su -c '/data/adb/modules/zygisk_vector/cli scope add com.peaklab.powermode com.picovr.settings'
    ```
 
-4. Restart the settings app (`pkill -f com.picovr.settings`), open `Settings → Lab → Power Management`, and select "性能模式".
+4. Restart the settings app (`pkill -f com.picovr.settings`), open `Settings → Lab → Power Management`, and select your desired mode.
 
 ## Build
 
@@ -56,13 +58,13 @@ Output: `app/build/picolab-power.apk`
 Hooks `com.picovr.fragments.PicolabFragment` in `com.picovr.settings`:
 
 1. **`T0(View)`** — sets a flag indicating the power menu is opening.
-2. **`PopupMenuHelper.c(...)`** — reflects into the power menu's `List<MenuItemData>` and appends a third "性能模式" item (text set directly via `MenuItemData.l(CharSequence)`).
-3. **`U0(int)`** — intercepts all three levels (0/1/2): calls `DeviceSwitchUtilsKt.e(context, i)` (system switch, writes `powerlevel=i` + persist props), **and extra-forces eyebuffer**: perf(2)→2448×2448, standard/eco(0/1)→1504×1504.
-4. **`Q(int)`** — makes the button/current-mode text show "性能模式".
+2. **`PopupMenuHelper.c(...)`** — reflects into the power menu's `List<MenuItemData>` and appends "性能" and "画质" items.
+3. **`U0(int)`** — intercepts all levels (0/1/2/3): calls `DeviceSwitchUtilsKt.e(context, i)` (system switch), **then explicitly enforces eyebuffer and FFR**: Quality (3)→2448×2448, all other levels→1504×1504; Performance (2)→FFR off, all other levels→FFR on.
+4. **`Q(int)`** — makes the button text show the correct mode name.
 
 ### Gotchas
 
-- `picolab_powerFunc3` resource string is proguard-obfuscated at runtime; **do not reflect into R.string** (`NoSuchFieldError`). Instead set text via `MenuItemData.l("性能模式")` or hardcode the resource ID.
+- `picolab_powerFunc3` resource string is proguard-obfuscated at runtime; **do not reflect into R.string** (`NoSuchFieldError`). Instead set text via `MenuItemData.l("性能")` or hardcode the resource ID.
 - `xposed_init` must **not have a UTF-8 BOM** (otherwise the class name's first byte is corrupted → `ClassNotFoundException`).
 - `T0` is a private method taking a `View` (not parameterless).
 - The real source of eyebuffer resolution at runtime is the **`persist.pvr.config.eyebuffer_width/height`** system properties (not `PXRuleValueFile.txt`), so this module directly writes `setSystemProperties` for 2448/1504 on switch.
