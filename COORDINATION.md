@@ -6,4 +6,6 @@ The endpoint publishes exactly one last-writer-wins request in the format `2|tok
 
 When no V-Sleep transaction exists, the request is applied asynchronously with `DeviceSwitchUtilsKt.e`, then eye-buffer is forced to 1504 for levels 0/1 or 2448 for level 2. `powerlevel` and eye-buffer are verified before `effective_owner=power:<mode>`, `phase=active`, and the matching ack are committed. Failures publish `phase=error` and restore the actual level in the visible UI.
 
+Since v1.2, the project also ships a **Magisk companion** (`magisk/` folder) that applies CPU/GPU performance scheduling while Performance Mode is active (it follows the forced `persist.pvr.config.eyebuffer_width=2448` signal and restores stock scheduling otherwise). This replaces the performance tuning previously shipped by the `pico4-trackerlimit` Performance/EXTREME flavors. The settings app itself cannot write CPU sysfs (root-only), hence the root companion.
+
 This protocol targets PICO 4 A8110 firmware `5.13.7`. Version 1.2 uses version code 3.

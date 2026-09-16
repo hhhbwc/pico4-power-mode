@@ -1,0 +1,6 @@
+id=pico4_power_tuner
+name=PICO 4 Power Mode Tuner
+version=v1.2
+versionCode=3
+author=wzy
+description=Companion for pico4-power-mode (LSPosed). Applies CPU/GPU performance scheduling when Performance Mode is active (follows the module's eyebuffer signal: 2448=on, else stock). Uses root for governor writes; no prompts. Install alongside the pico4-power-mode APK.

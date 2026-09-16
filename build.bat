@@ -10,10 +10,10 @@ set APKNAME=picolab-power
 REM -- toolchain (edit these paths to match your environment) --
 set JAVA="C:\Program Files\Java\jdk-26.0.1\bin\java.exe"
 set JAVAC="C:\Program Files\Java\jdk-26.0.1\bin\javac.exe"
-set R8="%REPO%r8.jar"
-set APKTOOL="%REPO%tools\apktool.jar"
+set R8="C:\Users\wzy\.openclaw\workspace\pico4\r8.jar"
+set APKTOOL="C:\Users\wzy\.openclaw\workspace\pico4\tools\apktool.jar"
 set JARSIGNER="C:\Program Files\Java\jdk-26.0.1\bin\jarsigner.exe"
-set KEYSTORE="%REPO%work\platform.keystore"
+set KEYSTORE="C:\Users\wzy\.openclaw\workspace\pico4\work\platform.keystore"
 
 echo === 1. compile ===
 if exist "%MOD%\build\classes" rmdir /s /q "%MOD%\build\classes"

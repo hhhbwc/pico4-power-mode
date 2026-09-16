@@ -1,92 +1,92 @@
-# PICO 4 — разблокировка производительности
+# PICO 4 Power Mode (разблокировка + тюнинг планировщика) v1.2
 
-**LSPosed-модуль**, открывающий скрытые режимы **Performance** (Производительность) и **Quality** (Качество) в **PICO 4 (A8110)** в `Настройки → Лаборатория → Управление питанием`.
+**LSPosed-модуль (1.2, versionCode 3)** для **PICO 4 (A8110)**: открывает скрытый
+**режим производительности** в «Настройки → Лаборатория → Управление питанием»,
+плюс **Magisk-компаньон**, применяющий высокопроизводительное планирование CPU/GPU
+при активном режиме производительности.
 
 > 中文: [README.md](README.md) · English: [README.en-US.md](README.en-US.md)
 
 ## Возможности
 
-- Добавляет в выпадающий список `Настройки → Лаборатория → Управление питанием` пункты **Производительность** и **Качество** (в стоке только «Экономия» и «Стандарт»).
-- Выбор режима (2 или 3) вызывает штатное системное переключение:
-  - **Качество (3) принудительно до 2448×2448 eyebuffer** (полное качество, чётче)
-  - **Производительность (2) использует заводской 1504×1504 eyebuffer**
-  - **stencil mesh выкл**
-  - `target_fps=-1` (без ограничения кадров)
-- **Двунаправленное принуждение eyebuffer**:
-  - Качество (3) → **2448×2448**
-  - Производительность (2) / Стандарт / Экономия (0/1) → **1504×1504**
-- **FFR явно отключается только в режиме производительности** (`persist.pvr.config.ffr`):
-  - Производительность (2) → **выкл** (`0`, без размытых краёв, вся производительность GPU идёт на частоту кадров)
-  - Качество (3) / Стандарт / Экономия (0/1) → FFR не перезаписывается, остаётся текущее системное значение
-- Пункты меню и текст кнопки показывают Производительность или Качество.
+**LSPosed-модуль (APK)**
+- Добавляет пункт **«Режим производительности»** в список управления питанием
+  (в стоке только «Экономия» и «Стандарт»); текст локализован на все языки PICO 4.
+- Выбор режима (`powerlevel=2`) вызывает официальный переключатель
+  (`DeviceSwitchUtilsKt.e()`) и принудительно устанавливает:
+  - **eyebuffer → 2448×2448**
+  - «Стандарт»/«Экономия» (0/1) → **1504×1504** (стоковое значение, экономия)
+- Согласование с **V-Sleep** по протоколу `pico_power_coord_v2`
+  (last-writer-wins — без конфликтов и двойных записей).
+- Проверка powerlevel + eyebuffer до фиксации; при ошибке — откат отображения.
+
+**Magisk-компаньон (Tuner, `pico4-power-mode_tuner_magisk_v1.2.zip`)**
+- Пока активен режим производительности (по сигналу eyebuffer=2448):
+  - CPU governor → `performance` (все ядра)
+  - GPU governor → `performance`
+  - задержки планировщика ядра 5мс / min-granularity 1мс
+  - nice для `pvrtrackingservice` и его потоков → `-10`
+- В остальных режимах → стоковое планирование (`schedutil` / `msm-adreno-tz` / 10мс / 3мс / nice 0).
+- Автоматически применяется при каждой загрузке; удаляется чисто.
+- **Перенесено из режимов Performance/EXTREME проекта pico4-trackerlimit**
+  (IO-планировщик не перенесён — ядро поддерживает только noop/cfq).
 
 ## Требования
 
-- PICO 4 (A8110), с root
-- Magisk + **Zygisk** (штатный Zygisk проверен; Zygisk-Next на этом устройстве не заработал)
-- **Zygisk Vector** (LSPosed-совместимый фреймворк, модуль `zygisk_vector`)
+- PICO 4 (A8110), root
+- Magisk + **Zygisk**; **Zygisk Vector** (LSPosed-совместимый фреймворк)
+- Tuner требует только Magisk (работает от root, без su-запросов)
 
 ## Установка
 
-1. Соберите модуль (см. Сборка) или используйте `picolab-power.apk` из релиза.
-2. Установите: `adb install -r app/build/picolab-power.apk`
-3. Настройте scope (через cli Vector или в менеджере Vector):
+1. Установите `pico4-power-mode_lsposed_v1.2.apk`
+2. Включите и задайте scope в Vector:
 
    ```
    su -c '/data/adb/modules/zygisk_vector/cli modules enable com.peaklab.powermode'
    su -c '/data/adb/modules/zygisk_vector/cli scope add com.peaklab.powermode com.picovr.settings'
    ```
 
-4. Перезапустите приложение настроек (`pkill -f com.picovr.settings`), откройте `Настройки → Лаборатория → Управление питанием` и выберите нужный режим.
+3. (Рекомендуется) Прошейте `pico4-power-mode_tuner_magisk_v1.2.zip` в Magisk
+4. Перезагрузите шлем; откройте «Настройки → Лаборатория → Управление питанием».
 
 ## Сборка
 
-Стандартный проект LSPosed-модуля. Нужны JDK (`--release 8`), `r8.jar` (D8), `apktool.jar`, `platform.keystore`.
+- APK: `build.bat` (JDK `--release 8`, `r8.jar`, `apktool.jar`, `platform.keystore`) → `app/build/picolab-power.apk`
+- Tuner: `python build_magisk.py` → `build/pico4-power-mode_tuner_magisk_v1.2.zip`
 
-```
-build.bat
-```
+## Как это работает (APK)
 
-Результат: `app/build/picolab-power.apk`
+Хук `com.picovr.fragments.PicolabFragment` в `com.picovr.settings`:
 
-- javac обязан использовать `--release 8` (JDK 26 выдаёт class v52, который D8 не принимает).
-- Xposed API — самописные стабы (`app/stub/`), только для компиляции, в dex не попадают.
-- apktool пакетирует + jarsigner подписывает (без нативных lib, zipalign не нужен).
+1. `T0(View)` — отметка открытия меню питания.
+2. `PopupMenuHelper.c(...)` — добавляет третий пункт «Режим производительности».
+3. `U0(int)` — публикует запрос `2|token|power|<0|1|2>`; после завершения транзакции
+   V-Sleep (точный ack) вызывает `DeviceSwitchUtilsKt.e()` и принудительно задаёт
+   eyebuffer (2→2448, иначе→1504); фиксирует `effective_owner/phase/ack`.
+4. `Q(int)` — текст кнопки/текущего режима.
 
-## Как это работает
+### Нюансы
 
-Хуки в `com.picovr.fragments.PicolabFragment` из `com.picovr.settings`:
-
-1. **`T0(View)`** — ставит флаг открытия меню питания.
-2. **`PopupMenuHelper.c(...)`** — отражательно добавляет в `List<MenuItemData>` пункты «性能» и «画质».
-3. **`U0(int)`** — перехватывает все уровни (0/1/2/3): вызывает `DeviceSwitchUtilsKt.e(context, i)` (системное переключение), **затем явно задаёт eyebuffer и FFR**: качество(3)→2448×2448, остальные уровни→1504×1504; производительность(2)→FFR выкл, остальные уровни→FFR вкл.
-4. **`Q(int)`** — показывает правильное название режима в кнопке.
-
-### Подводные камни
-
-- Ресурс `picolab_powerFunc3` во время выполнения обфусцирован proguard; **не отражайте в R.string** (`NoSuchFieldError`). Ставьте текст через `MenuItemData.l("性能")` или хардкодьте ID ресурса.
-- В `xposed_init` **не должно быть UTF-8 BOM** (иначе первый байт имени класса превратится в мусор → `ClassNotFoundException`).
-- `T0` — приватный метод с параметром `View` (не без параметров).
-- Реальный источник eyebuffer во время выполнения — **системные свойства `persist.pvr.config.eyebuffer_width/height`** (не `PXRuleValueFile.txt`), поэтому модуль напрямую пишет `setSystemProperties` для 2448/1504 при переключении.
+- Строки ресурсов обфусцированы proguard — не читать `R.string` рефлексией.
+- `xposed_init` без UTF-8 BOM.
+- Источник eyebuffer в рантайме — свойства `persist.pvr.config.eyebuffer_width/height`.
+- Приложение настроек не может писать в sysfs CPU (права только у root) — поэтому тюнинг в Magisk-компаньоне.
 
 ## Структура
 
 ```
 pico4-power-mode/
 ├── app/                      # проект LSPosed-модуля
-│   ├── AndroidManifest.xml
-│   ├── apktool.yml
-│   ├── assets/xposed_init    # объявление входного класса
-│   ├── res/values/arrays.xml # xposedscope
-│   ├── src/com/peaklab/powermode/PowerModeHook.java  # входной хук
-│   └── stub/                 # стабы Xposed/Android (только для компиляции)
-├── build.bat                 # скрипт сборки
-└── README.md / README.en-US.md / README.ru-RU.md
+├── magisk/                   # Magisk-компаньон (новое в v1.2)
+├── build.bat                 # сборка APK
+├── build_magisk.py           # сборка Tuner
+└── README*.md / COORDINATION.md
 ```
 
-## Связанное
+## Связанные проекты
 
-- [pico4-paper_tracker-autostart](https://github.com/hhhbwc/pico4-paper_tracker-autostart)
+- [pico4-trackerlimit](https://github.com/hhhbwc/pico4-trackerlimit) — разблокировка Motion Tracker 2.0.5
 - [pico4-winlimit](https://github.com/hhhbwc/pico4-winlimit)
 
 ## Лицензия

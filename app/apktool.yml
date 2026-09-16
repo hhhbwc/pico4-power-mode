@@ -1,5 +1,5 @@
 !!brut.androlib.meta.MetaInfo
-apkFileName: multitouch.apk
+apkFileName: picolab-power.apk
 isFrameworkApk: false
 packageInfo:
   forcedPackageId: 127

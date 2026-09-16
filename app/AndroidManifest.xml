@@ -12,7 +12,7 @@
         android:supportsRtl="true">
 
         <meta-data android:name="xposedmodule" android:value="true"/>
-        <meta-data android:name="xposeddescription" android:value="Power Mode 1.2: coordinated last-writer-wins powerlevel 0/1/2 endpoint for V-Sleep; verifies powerlevel and eyebuffer before commit"/>
+        <meta-data android:name="xposeddescription" android:value="Power Mode 1.2: coordinated last-writer-wins powerlevel 0/1/2 endpoint for V-Sleep; verifies powerlevel and eyebuffer before commit; pairs with the Magisk 'Power Mode Tuner' companion for CPU/GPU performance scheduling"/>
         <meta-data android:name="xposedminversion" android:value="82"/>
         <meta-data android:name="xposedscope" android:resource="@array/xposedscope"/>
 
