@@ -1,6 +1,6 @@
 # PICO 4 Power Mode（性能模式解锁 + 调度调优）
 
-一个 **LSPosed 模块（APK 1.2，versionCode 3）**，用于在 **PICO 4（A8110）** 的
+一个 **LSPosed 模块（APK 1.3，versionCode 4）**，用于在 **PICO 4（A8110）** 的
 「设置 → 实验室 → 电源管理方案」中解锁隐藏的 **性能模式** 档位；
 并配套一个 **Magisk 伴生调优模块（Tuner v1.4）**，在性能模式生效时应用 CPU/GPU 高性能调度。
 
@@ -16,10 +16,10 @@
   Res3D 自己只实现了 mode=1，不会恢复 stock；这个恢复由 Tuner 完成。
 - **120Hz 仲裁**：`persist.pvr.display.type=jdi493120` 时把
   `persist.pvr.config.eyebuffer_width/height` 钉在 2160；V-Sleep 生效/恢复期间让位。
-- **APK 源码**：`PowerModeHook` 在 120Hz 下也写 2160。当前已发布的 APK 1.2
-  仍会写 2448/1504，Tuner v1.4 会在 2 秒内纠正；重新构建 APK 后即原生生效。
+- **APK 1.3**：`PowerModeHook` 在 120Hz 下也写 2160；旧 APK 1.2 仍会写 2448/1504，
+  由 Tuner v1.4 在 2 秒内纠正。
 
-> v1.4 Tuner zip 目前从源码 `python build_magisk.py` 构建；Release 页尚未上传新 zip。
+> APK 1.3 与 Tuner v1.4 均已构建并实机验证覆盖安装/卸载/重装。
 
 ## 功能
 
@@ -52,7 +52,7 @@
 
 ## 安装
 
-1. 安装 `pico4-power-mode_lsposed_v1.2.apk`
+1. 安装 `pico4-power-mode_lsposed_v1.3.apk`
 2. 在 Vector 中启用并配置 scope：
 
    ```

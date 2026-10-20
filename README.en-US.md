@@ -1,6 +1,6 @@
 # PICO 4 Power Mode (unlock + scheduling tuner)
 
-An **LSPosed module (APK 1.2, versionCode 3)** that unlocks the hidden **Performance Mode**
+An **LSPosed module (APK 1.3, versionCode 4)** that unlocks the hidden **Performance Mode**
 in **PICO 4 (A8110)** `Settings → Lab → Power Management`, plus a **Magisk companion
 (Tuner v1.4)** that applies CPU/GPU performance scheduling while Performance Mode is active.
 
@@ -18,12 +18,10 @@ in **PICO 4 (A8110)** `Settings → Lab → Power Management`, plus a **Magisk c
   restores stock, so that restore is done here.
 - **120 Hz arbitration:** at `persist.pvr.display.type=jdi493120`, pin
   `persist.pvr.config.eyebuffer_width/height` to 2160 unless V-Sleep owns it.
-- **APK source:** `PowerModeHook` now also writes 2160 at 120 Hz. The released
-  APK 1.2 still writes 2448/1504; Tuner v1.4 corrects it within 2 s. A rebuilt
-  APK gets the behavior natively.
+- **APK 1.3:** `PowerModeHook` now also writes 2160 at 120 Hz. The older APK 1.2
+  still writes 2448/1504; Tuner v1.4 corrects it within 2 s.
 
-> The v1.4 Tuner zip is currently built from source with `python build_magisk.py`;
-> the new zip is not on the Release page yet.
+> APK 1.3 and Tuner v1.4 are built and device-tested for upgrade / uninstall / reinstall.
 
 ## Features
 
@@ -61,7 +59,7 @@ in **PICO 4 (A8110)** `Settings → Lab → Power Management`, plus a **Magisk c
 
 ## Installation
 
-1. Install `pico4-power-mode_lsposed_v1.2.apk`
+1. Install `pico4-power-mode_lsposed_v1.3.apk`
 2. Enable + set scope in Vector:
 
    ```
