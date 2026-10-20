@@ -19,6 +19,8 @@
 - **APK 源码**：`PowerModeHook` 在 120Hz 下也写 2160。当前已发布的 APK 1.2
   仍会写 2448/1504，Tuner v1.4 会在 2 秒内纠正；重新构建 APK 后即原生生效。
 
+> v1.4 Tuner zip 目前从源码 `python build_magisk.py` 构建；Release 页尚未上传新 zip。
+
 ## 功能
 
 **LSPosed 模块（APK）**

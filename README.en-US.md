@@ -22,6 +22,9 @@ in **PICO 4 (A8110)** `Settings → Lab → Power Management`, plus a **Magisk c
   APK 1.2 still writes 2448/1504; Tuner v1.4 corrects it within 2 s. A rebuilt
   APK gets the behavior natively.
 
+> The v1.4 Tuner zip is currently built from source with `python build_magisk.py`;
+> the new zip is not on the Release page yet.
+
 ## Features
 
 **LSPosed module (APK)**
