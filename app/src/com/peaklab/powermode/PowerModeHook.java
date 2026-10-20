@@ -154,7 +154,11 @@ public class PowerModeHook implements IXposedHookLoadPackage {
     private static void applyPowerMode(Context c, int mode, ClassLoader cl) throws Exception {
         Class<?> dsu = XposedHelpers.findClass("com.picovr.settings.custom.DeviceSwitchUtilsKt", cl);
         dsu.getMethod("e", Context.class, int.class).invoke(null, c, mode);
-        String expected = mode == 2 ? "2448" : "1504"; setProp("persist.pvr.config.eyebuffer_width", expected); setProp("persist.pvr.config.eyebuffer_height", expected);
+        // 120 Hz needs the native 2160 eyebuffer; 2448 (perf) and 1504 (stock)
+        // both fight the refresh-rate module's bandwidth clamp.
+        boolean is120 = "jdi493120".equals(getProp("persist.pvr.display.type"));
+        String expected = is120 ? "2160" : (mode == 2 ? "2448" : "1504");
+        setProp("persist.pvr.config.eyebuffer_width", expected); setProp("persist.pvr.config.eyebuffer_height", expected);
         if (getProp("persist.pvr.config.eyebuffer_width").equals(expected) == false || !getProp("persist.pvr.config.eyebuffer_height").equals(expected)) throw new IllegalStateException("eyebuffer verification failed");
         if (getInt(c, "powerlevel", -1) != mode) throw new IllegalStateException("powerlevel verification failed");
     }

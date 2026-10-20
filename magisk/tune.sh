@@ -1,7 +1,9 @@
 #!/system/bin/sh
-# PICO 4 Power Mode Tuner - apply/restore scheduling
-# usage: tune.sh 2       -> performance tuning (CPU/GPU governor, scheduler latencies, tracking nice)
-#        tune.sh 0|1     -> restore stock scheduling
+# PICO 4 Power Mode Tuner - apply/restore scheduling (v1.4)
+# usage: tune.sh 2         -> performance tuning (CPU/GPU governor, scheduler latencies, tracking nice)
+#        tune.sh 0|1       -> restore stock scheduling
+#        tune.sh niceperf  -> DEFER mode: Pico3dResolution owns gov/sched; only tracking nice -10
+#        tune.sh niceoff   -> DEFER mode: Pico3dResolution owns gov/sched; only tracking nice restore
 # Migrated from the pico4-trackerlimit performance/extreme flavors:
 #   CPU governor -> performance ; GPU governor -> performance ;
 #   kernel sched latency 5ms/1ms ; tracking service + threads nice -10
@@ -36,11 +38,14 @@ set_gpu_gov() {
 renice_tracking() {
   # $1 = target nice. NOTE: toybox/busybox renice -n are INCREMENT semantics
   # on this ROM, so compute per-thread increments from live values (idempotent).
+  # cut instead of busybox awk: this unit's awk can SIGSEGV when a thread exits
+  # between ls and the read.
   pid=$(pidof pvrtrackingservice 2>/dev/null)
   [ -n "$pid" ] || { echo "nice=n/a"; return; }
+  nice_of() { cut -d' ' -f19 "$1" 2>/dev/null; }
   set_one() {
     for tid in $(ls /proc/$pid/task 2>/dev/null); do
-      cur=$(awk '{print $19}' /proc/$tid/stat 2>/dev/null)
+      cur=$(nice_of /proc/$tid/stat)
       [ -n "$cur" ] || continue
       inc=$(( $1 - cur ))
       [ "$inc" -ne 0 ] && renice -n "$inc" -p "$tid" >/dev/null 2>&1
@@ -48,17 +53,25 @@ renice_tracking() {
   }
   set_one "$1"
   set_one "$1"   # second pass: only fixes stragglers (inc=0 skips)
-  echo "nice=$1(now:$(awk '{print $19}' /proc/$pid/stat 2>/dev/null))"
+  echo "nice=$1(now:$(nice_of /proc/$pid/stat))"
 }
 
 if [ "$MODE" = "2" ]; then
-  msg="APPLY perf"
+  msg="APPLY perf mode=2"
   r1=$(set_gov performance)
   r2=$(set_gpu_gov performance)
   echo 5000000 > /proc/sys/kernel/sched_latency_ns 2>/dev/null
   echo 1000000 > /proc/sys/kernel/sched_min_granularity_ns 2>/dev/null
   r3="sched=$(cat /proc/sys/kernel/sched_latency_ns 2>/dev/null)/$(cat /proc/sys/kernel/sched_min_granularity_ns 2>/dev/null)"
   r4=$(renice_tracking -10)
+elif [ "$MODE" = "niceperf" ]; then
+  msg="DEFER to Pico3dResolution (relay present, perf flag) - gov/sched untouched"
+  r1="cpu=defer"; r2="gpu=defer"; r3="sched=defer"
+  r4=$(renice_tracking -10)
+elif [ "$MODE" = "niceoff" ]; then
+  msg="DEFER to Pico3dResolution (relay present, stock flags) - gov/sched untouched"
+  r1="cpu=defer"; r2="gpu=defer"; r3="sched=defer"
+  r4=$(renice_tracking 0)
 else
   msg="RESTORE stock"
   r1=$(set_gov schedutil)

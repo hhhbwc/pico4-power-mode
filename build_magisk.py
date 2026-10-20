@@ -6,7 +6,7 @@ MAG = os.path.join(BASE, "magisk")
 BUILD = os.path.join(BASE, "build")
 os.makedirs(BUILD, exist_ok=True)
 
-ZIPNAME = "pico4-power-mode_tuner_magisk_v1.2.zip"
+ZIPNAME = "pico4-power-mode_tuner_magisk_v1.4.zip"
 
 files = ["module.prop", "service.sh", "daemon.sh", "kill_daemon.sh", "tune.sh", "action.sh", "uninstall.sh", "README.md"]
 

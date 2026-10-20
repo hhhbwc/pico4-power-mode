@@ -1,6 +1,6 @@
 id=pico4_power_tuner
 name=PICO 4 Power Mode Tuner
-version=v1.2
-versionCode=3
+version=v1.4
+versionCode=5
 author=wzy
-description=Companion for pico4-power-mode (LSPosed). Applies CPU/GPU performance scheduling when Performance Mode is active (follows the module's eyebuffer signal: 2448=on, else stock). Uses root for governor writes; no prompts. Install alongside the pico4-power-mode APK.
+description=Companion for pico4-power-mode (LSPosed). v1.4 arbitration: at 120 Hz (persist.pvr.display.type=jdi493120) pins the eyebuffer to native 2160x2160 unless V-Sleep owns it; when Pico3dResolution is installed its relay remains the source of truth, and this tuner applies that relay directly (waking the frozen res3d process when needed); during Performance Mode it saves the user's relay, substitutes 0:6:1:1:1, and restores the saved relay on exit. Without res3d it applies CPU/GPU/sched tuning directly. Uses root for governor writes; no prompts.
