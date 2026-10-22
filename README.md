@@ -70,7 +70,7 @@
 
 ## 工作原理（APK）
 
-Hook `com.picovr.settings` 的 `com.picovr.fragment s.PicolabFragment`：
+Hook `com.picovr.settings` 的 `com.picovr.fragments.PicolabFragment`：
 
 1. `T0(View)` — 标记电源菜单即将弹出。
 2. `PopupMenuHelper.c(...)` — 向菜单注入第三个「性能模式」项（本地化文案）。
